@@ -1,14 +1,14 @@
 // 平板檢修記錄 — service worker（離線可用）
-const CACHE = "tablet-inspection-v1.1";
+const CACHE = "tablet-inspection-v1.2";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./exceljs.min.js",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
-  "./icons/maskable-512.png",
-  "./icons/apple-touch-icon.png"
+  "./icon-192.png",
+  "./icon-512.png",
+  "./maskable-512.png",
+  "./apple-touch-icon.png"
 ];
 
 self.addEventListener("install", e => {
