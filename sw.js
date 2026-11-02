@@ -1,5 +1,5 @@
 // 平板檢修記錄 — service worker（離線可用）
-const CACHE = "tablet-inspection-v1.3";
+const CACHE = "tablet-inspection-v1.4";
 const ASSETS = [
   "./",
   "./index.html",
