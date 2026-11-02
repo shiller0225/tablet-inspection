@@ -25,6 +25,7 @@
   color-scheme:dark;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:18.5px;line-height:1.5}
 body{
   min-height:100dvh;
@@ -41,6 +42,8 @@ body::before{ /* subtle grid */
   mask-image:linear-gradient(to bottom,black,transparent 70%);
 }
 button,input,select,textarea{font:inherit;color:inherit}
+body{overscroll-behavior-y:contain}
+button,.tile,.chip,.fchip,.opt,nav button{touch-action:manipulation;-webkit-user-select:none;user-select:none}
 button{cursor:pointer}
 
 /* ---------- header ---------- */
@@ -97,7 +100,7 @@ textarea{min-height:78px;resize:vertical}
 
 /* record state banner */
 .state{display:flex;align-items:center;gap:8px;font-size:15px;color:var(--muted);margin:2px 2px 10px}
-.state .tag{font-family:var(--mono);font-size:12.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line2);letter-spacing:.06em}
+.state .tag{flex:none;white-space:nowrap;font-family:var(--mono);font-size:12.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line2);letter-spacing:.06em}
 .state .tag.new{color:var(--accent);border-color:rgba(34,211,238,.5)}
 .state .tag.edit{color:var(--warn);border-color:rgba(251,191,36,.5)}
 .state .tag.dirty{color:var(--bad);border-color:rgba(248,113,113,.5)}
@@ -350,7 +353,7 @@ nav button.on::before{content:"";position:absolute;top:0;width:28px;height:3px;b
       <button class="btn danger w100" id="btnWipe" style="margin-top:10px">清除全部資料</button>
       <div class="note-s">資料只存在這支手機的這個 App 裡。建議每學期按「備份資料」存一份到雲端硬碟；換手機時用「還原備份」匯回。</div>
     </div>
-    <div style="text-align:center;font-family:var(--mono);font-size:12.5px;color:var(--dim);letter-spacing:.1em">TABLET·CHECK v1.4</div>
+    <div style="text-align:center;font-family:var(--mono);font-size:12.5px;color:var(--dim);letter-spacing:.1em">TABLET·CHECK v1.5</div>
   </section>
 </main>
 
@@ -388,7 +391,6 @@ nav button.on::before{content:"";position:absolute;top:0;width:28px;height:3px;b
 <div class="toast" id="toast"></div>
 <div class="dlg" id="dlg"><div class="card"><h3 id="dlgT"></h3><p id="dlgP"></p><div class="acts"><button class="btn ghost" id="dlgNo">取消</button><button class="btn primary" id="dlgYes">確定</button></div></div></div>
 
-<script src="exceljs.min.js" defer></script>
 <script>
 "use strict";
 /* ================= constants ================= */
@@ -420,13 +422,31 @@ const tState = t => !t.issues.length ? "ok" : t.status==="已修復" ? "fix" : t
 function load(key,fb){ try{ const v = localStorage.getItem(key); return v ? JSON.parse(v) : fb; }catch(e){ return fb; } }
 function store(key,v){ try{ localStorage.setItem(key,JSON.stringify(v)); return true; }catch(e){ toast("⚠ 儲存失敗：手機儲存空間不足？"); return false; } }
 
-let records = load(K_REC,[]);
-const saveRecords = () => store(K_REC,records);
+// 統一資料格式：補齊 01～40 號、修正缺漏欄位，避免不完整的資料讓畫面當掉
+function normTablet(t,no){
+  const issues = Array.isArray(t&&t.issues) ? ISSUES.filter(x=>t.issues.includes(x)) : [];
+  let status = issues.length ? (STATUSES.includes(t&&t.status) ? t.status : "待修") : "";
+  return {no, issues, status, note: typeof (t&&t.note)==="string" ? t.note.slice(0,200) : ""};
+}
+function normRec(r){
+  if(!r || typeof r!=="object" || !/^\d{4}-\d{2}-\d{2}$/.test(r.date||"") || ![...CARTS,"其他"].includes(r.cart)) return null;
+  const other = r.cart==="其他" ? String(r.other||"").trim() : "";
+  const byNo = {}; (Array.isArray(r.tablets)?r.tablets:[]).forEach(t=>{ if(t&&t.no) byNo[String(t.no).padStart(2,"0")]=t; });
+  return {id:recId(r.date,r.cart,other), date:r.date, cart:r.cart, other,
+    tablets: NOS.map(no=>normTablet(byNo[no],no)),
+    createdAt: Number(r.createdAt)||Date.now(), updatedAt: Number(r.updatedAt)||Date.now()};
+}
+function normAll(list){ const m=new Map(); (Array.isArray(list)?list:[]).forEach(x=>{ const r=normRec(x); if(r && (!m.has(r.id) || r.updatedAt>m.get(r.id).updatedAt)) m.set(r.id,r); }); return [...m.values()]; }
+// 存檔時只存「有問題或有備註」的平板（正常的不必存），大幅節省手機空間；讀取時自動補回
+const packRec = r => ({...r, tablets: r.tablets.filter(t=>t.issues.length||t.note)});
+let records = normAll(load(K_REC,[]));
+const saveRecords = () => store(K_REC,records.map(packRec));
 const findRec = id => records.find(r=>r.id===id);
 
 /* ================= toast / dialog ================= */
 let toastT;
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove("show"),2200); }
+let dlgBack=null;
 function confirmBox(title,msg,yes="確定",danger=false,noCancel=false){
   return new Promise(res=>{
     $("#dlgT").textContent=title; $("#dlgP").textContent=msg;
@@ -434,7 +454,13 @@ function confirmBox(title,msg,yes="確定",danger=false,noCancel=false){
     y.textContent=yes; y.className = "btn " + (danger?"danger":"primary");
     n.style.display = noCancel ? "none" : "";
     $("#dlg").classList.add("show");
-    const done=v=>{ $("#dlg").classList.remove("show"); y.onclick=n.onclick=null; res(v); };
+    history.pushState({tic:"dlg"},"");
+    const done=(v,fromBack)=>{
+      $("#dlg").classList.remove("show"); y.onclick=n.onclick=null; dlgBack=null;
+      if(!fromBack && history.state && history.state.tic==="dlg") history.back();
+      res(v);
+    };
+    dlgBack=()=>done(false,true);
     y.onclick=()=>done(true); n.onclick=()=>done(false);
   });
 }
@@ -445,14 +471,15 @@ tick(); setInterval(tick,15000);
 
 /* ================= editor state ================= */
 let ed = load(K_DRAFT,null);
-if(!ed || !ed.dirty){ ed = {date:today(),cart:"",other:"",tablets:blankTablets(),dirty:false}; }
+if(!ed || !ed.dirty || !Array.isArray(ed.tablets) || ed.tablets.length!==N){ ed = {date:today(),cart:"",other:"",tablets:blankTablets(),dirty:false,baseId:null}; }
+else { ed.tablets = NOS.map((no,i)=>normTablet(ed.tablets[i],no)); if(ed.baseId===undefined) ed.baseId = ed.cart ? recId(ed.date,ed.cart,ed.other) : null; }
 const saveDraft = () => store(K_DRAFT,ed);
 const edId = () => ed.cart ? recId(ed.date,ed.cart,ed.other) : null;
 
 function loadEditorFor(date,cart,other){
   const id = cart ? recId(date,cart,other) : null;
   const r = id && findRec(id);
-  ed = {date,cart,other,tablets: r ? JSON.parse(JSON.stringify(r.tablets)) : blankTablets(),dirty:false};
+  ed = {date,cart,other,tablets: r ? JSON.parse(JSON.stringify(r.tablets)) : blankTablets(),dirty:false,baseId:id};
   saveDraft();
 }
 async function guardDirty(){
@@ -541,15 +568,23 @@ $("#btnAllOk").addEventListener("click",async()=>{
   if(n && !(await confirmBox("全部設為正常",`會清除目前 ${n} 台的問題與備註，確定嗎？`,"全部正常",true))) return;
   ed.tablets=blankTablets(); markDirty(); toast("40 台已設為正常");
 });
-$("#btnSave").addEventListener("click",()=>{
+$("#btnSave").addEventListener("click",async()=>{
   if(!ed.cart) return;
-  if(ed.cart==="其他" && !ed.other.trim()){ toast("請輸入「其他車」的車名"); $("#inOther").focus(); return; }
+  if(ed.cart==="其他"){ clearTimeout(otherT); ed.other=$("#inOther").value.trim(); } // 先取用剛輸入的車名，不等延遲
+  if(ed.cart==="其他" && !ed.other){ toast("請輸入「其他車」的車名"); $("#inOther").focus(); return; }
   const id=edId(), now=Date.now();
   const old=findRec(id);
+  if(old && ed.baseId!==id){
+    // 這天這台車已有另一筆紀錄，而目前的內容不是從它載入的 → 不可直接覆蓋
+    const n=old.tablets.filter(t=>t.issues.length).length;
+    const ok=await confirmBox("這天已有紀錄",`${cartLabel(old.cart,old.other)} ${fmtD(old.date)} 已經有一筆紀錄（異常 ${n} 台）。\n要把這次檢查的結果合併進去嗎？\n（兩邊都有填寫的平板，以這次為準）`,"合併");
+    if(!ok) return;
+    ed.tablets = old.tablets.map((t,i)=>{ const e=ed.tablets[i]; return (e.issues.length||e.note) ? e : t; });
+  }
   const rec={id,date:ed.date,cart:ed.cart,other:ed.cart==="其他"?ed.other.trim():"",tablets:JSON.parse(JSON.stringify(ed.tablets)),createdAt:old?old.createdAt:now,updatedAt:now};
   if(old) records[records.indexOf(old)]=rec; else records.push(rec);
   if(!saveRecords()) return;
-  ed.dirty=false; saveDraft(); buzz(20);
+  ed.dirty=false; ed.baseId=id; saveDraft(); buzz(20);
   const bad=rec.tablets.filter(t=>t.issues.length).length;
   toast(`✓ 已儲存 ${cartLabel(rec.cart,rec.other)} ${fmtD(rec.date)}　異常 ${bad} 台`);
   renderInspect(); updateBadge();
@@ -558,13 +593,16 @@ $("#btnSave").addEventListener("click",()=>{
 /* ================= bottom sheet ================= */
 let shI=-1;
 function openSheet(i){
+  if(shI<0) history.pushState({tic:"sheet"},"");
   shI=i; renderSheet();
   $("#scrim").classList.add("show"); $("#sheet").classList.add("show");
 }
-function closeSheet(){
+function closeSheet(fromBack){
+  if(shI<0) return;
   const note=$("#shNote").value.trim();
-  if(shI>=0 && note!==ed.tablets[shI].note){ ed.tablets[shI].note=note; markDirty(); }
-  shI=-1; $("#scrim").classList.remove("show"); $("#sheet").classList.remove("show"); $("#shNote").blur();
+  if(note!==ed.tablets[shI].note){ ed.tablets[shI].note=note; markDirty(); }
+  shI=-1;
+  if(!fromBack && history.state && history.state.tic==="sheet") history.back(); $("#scrim").classList.remove("show"); $("#sheet").classList.remove("show"); $("#shNote").blur();
 }
 function commitNote(){
   if(shI<0) return;
@@ -601,8 +639,8 @@ $("#shSeg").addEventListener("click",e=>{
 });
 $("#shPrev").addEventListener("click",()=>{ commitNote(); renderInspectBody(); if(shI>0){ shI--; renderSheet(); } });
 $("#shNext").addEventListener("click",()=>{ commitNote(); renderInspectBody(); if(shI<N-1){ shI++; renderSheet(); } });
-$("#shDone").addEventListener("click",closeSheet);
-$("#scrim").addEventListener("click",closeSheet);
+$("#shDone").addEventListener("click",()=>closeSheet());
+$("#scrim").addEventListener("click",()=>closeSheet());
 
 /* ================= history view ================= */
 let histFilter="全部";
@@ -680,6 +718,7 @@ $("#trackList").addEventListener("click",e=>{
 /* ================= export view ================= */
 let exCarts=new Set([...CARTS,"其他"]);
 function initExport(){
+  loadExcel().catch(()=>{}); // 進入匯出頁就先在背景載入，按下載時不用等
   if(!$("#exFrom").value){
     const d=new Date(); $("#exTo").value=ymd(d);
     const first=records.length ? records.map(r=>r.date).sort()[0] : ymd(new Date(d.getFullYear(),d.getMonth(),1));
@@ -716,8 +755,18 @@ function renderExPreview(){
   $("#btnXlsx").disabled=$("#btnShare").disabled=!sel.length;
 }
 
+let excelP=null;
+function loadExcel(){
+  if(window.ExcelJS) return Promise.resolve();
+  if(!excelP) excelP=new Promise((res,rej)=>{
+    const sc=document.createElement("script"); sc.src="exceljs.min.js";
+    sc.onload=()=>res(); sc.onerror=()=>{ excelP=null; rej(new Error("Excel 模組載入失敗，請確認網路後再試")); };
+    document.head.appendChild(sc);
+  });
+  return excelP;
+}
 async function buildWorkbook(){
-  if(!window.ExcelJS){ toast("Excel 模組載入中，請稍候再試"); return null; }
+  await loadExcel();
   const sel=exSelected(); const onlyBad=$("#exOnlyBad").checked;
   let f=$("#exFrom").value, t=$("#exTo").value; if(f>t) [f,t]=[t,f];
   const wb=new ExcelJS.Workbook(); wb.creator="資訊車平板檢修記錄"; wb.created=new Date();
@@ -885,6 +934,7 @@ async function renderDataInfo(){
     <div class="kv"><span>檢修紀錄</span><b>${records.length} 次</b></div>
     <div class="kv"><span>累計檢查台次 / 異常</span><b>${tabs} / ${bad}</b></div>
     <div class="kv"><span>資料期間</span><b>${dates.length?fmtD(dates[0])+" – "+fmtD(dates[dates.length-1]):"—"}</b></div>
+    <div class="kv"><span>已用空間</span><b>${(()=>{ try{ return ((localStorage.getItem(K_REC)||"").length*2/1024).toFixed(0)+" KB"; }catch(e){ return "—"; } })()}</b></div>
     <div class="kv"><span>儲存保護</span><b style="font-family:var(--sans)">${persist}</b></div>`;
 }
 $("#btnBackup").addEventListener("click",()=>{
@@ -898,11 +948,14 @@ $("#fileRestore").addEventListener("change",async e=>{
   const f=e.target.files[0]; e.target.value=""; if(!f) return;
   try{
     const data=JSON.parse(await f.text());
-    const incoming=Array.isArray(data)?data:data.records;
-    if(!Array.isArray(incoming)||incoming.some(r=>!r.id||!r.date||!r.cart||!Array.isArray(r.tablets))) throw new Error("格式不符");
+    const raw=Array.isArray(data)?data:(data&&data.records);
+    if(!Array.isArray(raw)) throw new Error("格式不符");
+    const incoming=normAll(raw);
+    if(!incoming.length) throw new Error("備份檔裡沒有可用的紀錄");
+    const skipped=raw.length-incoming.length;
     const map=new Map(records.map(r=>[r.id,r])); let add=0,upd=0;
     incoming.forEach(r=>{ const o=map.get(r.id); if(!o){add++; map.set(r.id,r);} else if((r.updatedAt||0)>(o.updatedAt||0)){upd++; map.set(r.id,r);} });
-    if(!(await confirmBox("還原備份",`備份內有 ${incoming.length} 筆紀錄。\n將新增 ${add} 筆、以較新版本更新 ${upd} 筆，現有其他資料保留。`,"開始還原"))) return;
+    if(!(await confirmBox("還原備份",`備份內有 ${incoming.length} 筆紀錄${skipped>0?`（另有 ${skipped} 筆格式錯誤已略過）`:""}。\n將新增 ${add} 筆、以較新版本更新 ${upd} 筆，現有其他資料保留。`,"開始還原"))) return;
     records=[...map.values()]; saveRecords(); updateBadge(); renderDataInfo(); renderExPreview(); toast(`還原完成：新增 ${add}、更新 ${upd}`);
   }catch(err){ toast("無法讀取備份檔："+err.message); }
 });
@@ -910,7 +963,7 @@ $("#btnWipe").addEventListener("click",async()=>{
   if(!records.length){ toast("目前沒有資料"); return; }
   if(!(await confirmBox("清除全部資料",`將刪除全部 ${records.length} 筆檢修紀錄，無法復原。\n建議先按「備份資料」。`,"下一步",true))) return;
   if(!(await confirmBox("再次確認","真的要清除全部資料嗎？","全部清除",true))) return;
-  records=[]; saveRecords(); ed={date:today(),cart:"",other:"",tablets:blankTablets(),dirty:false}; saveDraft();
+  records=[]; saveRecords(); ed={date:today(),cart:"",other:"",tablets:blankTablets(),dirty:false,baseId:null}; saveDraft();
   updateBadge(); renderDataInfo(); renderExPreview(); toast("已清除全部資料");
 });
 
@@ -970,11 +1023,31 @@ $("#btnInstall2").addEventListener("click",doInstall);
 $("#instX").addEventListener("click",()=>{ $("#instCard").classList.remove("show"); try{ localStorage.setItem("tic.instHide","1"); }catch(e){} toast("之後可到「匯出」頁最下方安裝"); });
 setTimeout(()=>showInstallCard(),1500);
 
+/* ================= Android 返回鍵 ================= */
+window.addEventListener("popstate",()=>{
+  if(dlgBack){ dlgBack(); return; }
+  if(shI>=0){ closeSheet(true); return; }
+});
+
+/* ================= 跨過午夜自動換日 ================= */
+let openDay=today();
+function checkNewDay(){
+  const t=today(); if(t===openDay) return;
+  const prev=openDay; openDay=t;
+  if(!ed.dirty && ed.date===prev){
+    loadEditorFor(t,ed.cart,ed.other);
+    if($("#v-inspect").classList.contains("active")) renderInspect();
+    toast(`已切換到今天 ${fmtD(t)}`);
+  }
+}
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) checkNewDay(); });
+setInterval(checkNewDay,60000);
+
 /* ================= init ================= */
 renderInspect(); updateBadge();
 if(ed.dirty) toast("已恢復上次未儲存的檢查");
 try{ navigator.storage && navigator.storage.persist && navigator.storage.persist(); }catch(e){}
-if("serviceWorker" in navigator && location.protocol==="https:"){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
+if("serviceWorker" in navigator && window.isSecureContext){ navigator.serviceWorker.register("sw.js").catch(()=>{}); }
 </script>
 </body>
 </html>

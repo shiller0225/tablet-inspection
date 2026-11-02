@@ -1,5 +1,5 @@
 // 平板檢修記錄 — service worker（離線可用）
-const CACHE = "tablet-inspection-v1.4";
+const CACHE = "tablet-inspection-v1.5";
 const ASSETS = [
   "./",
   "./index.html",
@@ -10,9 +10,15 @@ const ASSETS = [
   "./maskable-512.png",
   "./apple-touch-icon.png"
 ];
+const NET_TIMEOUT = 3000; // 網路超過 3 秒沒回應就先用手機內的版本
 
 self.addEventListener("install", e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // cache:"reload" 直接向伺服器拿最新檔，避免 GitHub 的 10 分鐘快取讓手機存到舊版
+  e.waitUntil(
+    caches.open(CACHE)
+      .then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: "reload" }))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", e => {
@@ -23,19 +29,28 @@ self.addEventListener("activate", e => {
   );
 });
 
-// 頁面：先抓網路（有新版就更新），沒網路用快取；其他檔案：快取優先
 self.addEventListener("fetch", e => {
   const req = e.request;
   if (req.method !== "GET" || new URL(req.url).origin !== location.origin) return;
+
+  // 頁面：網路優先（拿到新版就更新快取），超過 3 秒或離線就改用快取
   if (req.mode === "navigate") {
-    e.respondWith(
-      fetch(req).then(res => {
-        const copy = res.clone();
-        caches.open(CACHE).then(c => c.put("./index.html", copy));
+    e.respondWith((async () => {
+      const cache = await caches.open(CACHE);
+      const net = fetch(req, { cache: "no-cache" }).then(res => {
+        if (res.ok) cache.put("./index.html", res.clone());
         return res;
-      }).catch(() => caches.match("./index.html"))
-    );
+      });
+      net.catch(() => {});
+      const cached = await cache.match("./index.html");
+      if (!cached) return net;
+      const timeout = new Promise(r => setTimeout(() => r(cached), NET_TIMEOUT));
+      try { return await Promise.race([net, timeout]); }
+      catch { return cached; }
+    })());
     return;
   }
-  e.respondWith(caches.match(req).then(hit => hit || fetch(req)));
+
+  // 其他檔案：快取優先
+  e.respondWith(caches.match(req, { ignoreSearch: true }).then(hit => hit || fetch(req)));
 });
