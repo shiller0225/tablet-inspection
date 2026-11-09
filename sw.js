@@ -21,10 +21,11 @@ self.addEventListener("install", e => {
   );
 });
 
+// 只清除本 App 自己的舊快取（同網址下還有其他 App，不可動到）
 self.addEventListener("activate", e => {
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k.startsWith("tablet-inspection-") && k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
